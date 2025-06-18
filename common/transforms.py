@@ -81,3 +81,55 @@ def int_to_boolean(df: DataFrame, col_name: str, new_col: str) -> DataFrame:
         transformation = to_boolean(F.col(col_name))
 
     return df.withColumn(new_col, transformation)
+
+
+def upsert_dataframe_to_table(
+    source_df, catalog_table, merge_key="id", add_metadata=True
+):
+    """
+    Upsert a DataFrame to a Unity Catalog Delta table with automatic table creation.
+    Works in both local Databricks Connect and Databricks workspace environments.
+    """
+    from delta.tables import DeltaTable
+    from pyspark.sql.functions import current_timestamp, lit
+    import uuid
+
+    # Should work in Databricks or locally in vscode
+    try:
+        # Try to use existing spark session (Databricks workspace or VS Code extension)
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.getActiveSession()
+        if spark is None:
+            # If no active session, create one (for Databricks Connect)
+            from databricks.connect import DatabricksSession
+
+            spark = DatabricksSession.builder.getOrCreate()
+    except ImportError:
+        # Fallback for environments where databricks.connect is not available
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.builder.getOrCreate()
+
+    if add_metadata:
+        batch_id = str(uuid.uuid4())[:8]
+        df_processed = source_df.withColumn(
+            "last_updated", current_timestamp()
+        ).withColumn("processing_batch", lit(batch_id))
+    else:
+        df_processed = source_df
+
+    df_clean = df_processed.dropDuplicates([merge_key])
+
+    if spark.catalog.tableExists(catalog_table):
+        delta_table = DeltaTable.forName(spark, catalog_table)
+        delta_table.alias("target").merge(
+            df_clean.alias("source"), f"target.{merge_key} = source.{merge_key}"
+        ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+
+        print(f"Upserted data to existing table {catalog_table}")
+        return "updated"
+    else:
+        df_clean.write.format("delta").mode("overwrite").saveAsTable(catalog_table)
+        print(f"Created new table {catalog_table}")
+        return "created"
