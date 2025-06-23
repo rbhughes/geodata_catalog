@@ -100,6 +100,7 @@ def upsert_dataframe_to_table(
         from pyspark.sql import SparkSession
 
         spark = SparkSession.getActiveSession()
+
         if spark is None:
             # If no active session, create one (for Databricks Connect)
             from databricks.connect import DatabricksSession
@@ -110,6 +111,8 @@ def upsert_dataframe_to_table(
         from pyspark.sql import SparkSession
 
         spark = SparkSession.builder.getOrCreate()
+
+    spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
 
     if add_metadata:
         batch_id = str(uuid.uuid4())[:8]
